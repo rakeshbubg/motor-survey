@@ -80,6 +80,21 @@ For the pilot, a Kuwaiti SMS provider usually gives better delivery and a sender
 
 On the server (docker-compose), put the same values in `deploy/.env`: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `TWILIO_SID`, `TWILIO_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_WHATSAPP_FROM`.
 
+## Photo checks on the phone
+
+Every photo (live camera or gallery) is checked on the customer's phone before it is accepted:
+- **Is there a car?** For the 8 required positions, a small free model (TensorFlow.js COCO-SSD, Apache 2.0) must see a car
+  filling a reasonable part of the frame. Photos of screens, rooms or people are refused with a "retake" message.
+- **Quality:** blur, too dark, too bright, low resolution.
+- First failure: the customer must **retake**. From the second attempt they may "Use anyway (will be reviewed)",
+  and the photo is flagged in the report's evidence checks for UW.
+- Gallery uploads are allowed (`Survey:AllowGallery`) but flagged as "not taken live". Set it to `false` to force the live camera.
+- Customers can tap a number on the car diagram or the Take button; both offer **Take photo** or **Upload from gallery**.
+
+The model (~5 MB) is downloaded into the server image at build time and cached by the phone. If it can't load, the check is skipped
+(never blocks the customer) and UW still sees every photo. It can't tell a real car from a photo of a car on a screen;
+the damage model you train later is the place for stronger fraud checks.
+
 ## The AI model
 
 Until a model is installed, every survey is routed to manual UW review (and says so).

@@ -106,7 +106,7 @@
     const pos = { front: [100, 16], fr: [176, 56], right: [190, 200], rr: [176, 344], rear: [100, 384], rl: [24, 344], left: [10, 200], fl: [24, 56] };
     const dots = D.slots.filter(s => s.required).map((s, i) => {
       const [x, y] = pos[s.key] || [0, 0], on = has(s.key);
-      return `<g><circle cx="${x}" cy="${y}" r="14" fill="${on ? '#ffe600' : 'var(--bg)'}" stroke="currentColor" stroke-width="2"/><text x="${x}" y="${y + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${on ? '#111' : 'currentColor'}">${i + 1}</text></g>`;
+      return `<g class="pdot" data-slot="${s.key}" role="button" tabindex="0" aria-label="${esc((i + 1) + '. ' + slotName(s))}" style="cursor:pointer"><circle cx="${x}" cy="${y}" r="22" fill="transparent"/><circle cx="${x}" cy="${y}" r="14" fill="${on ? '#ffe600' : 'var(--bg)'}" stroke="currentColor" stroke-width="2"/><text x="${x}" y="${y + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${on ? '#111' : 'currentColor'}" pointer-events="none">${i + 1}</text></g>`;
     }).join('');
     return `<svg viewBox="-8 0 216 400" role="img" aria-label="${esc(t('count', { n: D.slots.filter(s => s.required && has(s.key)).length }))}" dir="ltr" style="color:var(--ink)">
       <rect x="48" y="44" width="104" height="312" rx="44" fill="var(--con2)" stroke="currentColor" stroke-width="2"/>
@@ -121,9 +121,18 @@
     app.innerHTML = `${steps(1)}<div class="grid2"><section><h2>${esc(t('takeTitle'))}</h2><p class="mut">${esc(t('takeHint'))}</p>
       <div class="plan" id="plan">${carSvg()}</div>${locDenied && !loc ? `<p class="err">${esc(t('gpsOff'))}</p>` : ''}</section>
       <section class="slots" id="slots">${D.slots.map((s, i) => slotHtml(s, i)).join('')}</section></div>`;
-    app.querySelectorAll('[data-slot]').forEach(b => b.onclick = () => openCamera(D.slots.find(s => s.key === b.dataset.slot)));
+    app.querySelectorAll('#slots [data-slot]').forEach(b => b.onclick = () => chooseSource(D.slots.find(s => s.key === b.dataset.slot)));
+    bindPlan();
     D.photos.forEach(p => { if (!thumbs[p.slot]) loadThumb(p.slot); });
     updateDock();
+    loadDetector();   // start loading the car check in the background
+  }
+  function bindPlan() {
+    document.querySelectorAll('#plan .pdot').forEach(g => {
+      const go = () => { if (upState[g.dataset.slot] !== 'up') chooseSource(D.slots.find(s => s.key === g.dataset.slot)); };
+      g.addEventListener('click', go);
+      g.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
+    });
   }
   function slotHtml(s, i) {
     const st = upState[s.key], done = has(s.key);
@@ -137,8 +146,9 @@
     const s = D.slots.find(x => x.key === key), i = D.slots.indexOf(s);
     const el = $('#sl-' + key); if (!el) return;
     el.outerHTML = slotHtml(s, i);
-    $(`[data-slot="${key}"]`).onclick = () => openCamera(s);
+    $(`#slots [data-slot="${key}"]`).onclick = () => chooseSource(s);
     $('#plan').innerHTML = carSvg();
+    bindPlan();
     updateDock();
   }
   function updateDock() {
@@ -151,15 +161,74 @@
     try { const r = await fetch(`/api/survey/${encodeURIComponent(token)}/photos/${slot}`); if (r.ok) { thumbs[slot] = URL.createObjectURL(await r.blob()); refreshSlot(slot); } } catch { }
   }
 
+  // ---------- car check (TensorFlow.js COCO-SSD, runs on the phone; never blocks if it can't load) ----------
+  const EXTERIOR = ['front', 'fr', 'right', 'rr', 'rear', 'rl', 'left', 'fl'];
+  const tries = {};
+  let detectorP = null;
+  const loadScript = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
+  function loadDetector() {
+    if (detectorP) return detectorP;
+    detectorP = (async () => {
+      try {
+        if (!window.tf) await loadScript('/lib/tf.min.js');
+        if (!window.cocoSsd) await loadScript('/lib/coco-ssd.min.js');
+        // 1) weights hosted on our own server (downloaded at build), 2) Google's hosted copy
+        for (const cfg of [{ base: 'lite_mobilenet_v2', modelUrl: '/lib/coco-ssd-lite/model.json' }, { base: 'lite_mobilenet_v2' }]) {
+          try { return await window.cocoSsd.load(cfg); } catch { }
+        }
+      } catch { }
+      return null;
+    })();
+    return detectorP;
+  }
+  async function carCheck(slot, img) {
+    if (!EXTERIOR.includes(slot.key)) return { ok: true, skipped: true };
+    const det = await Promise.race([loadDetector(), new Promise(r => setTimeout(() => r(null), 12000))]);
+    if (!det) return { ok: true, skipped: true };
+    const max = 640, sc = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas'); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    try {
+      const preds = await det.detect(c, 10, 0.3);
+      const best = preds.filter(p => ['car', 'truck', 'bus'].includes(p.class))
+        .map(p => ({ score: p.score, area: (p.bbox[2] * p.bbox[3]) / (c.width * c.height) }))
+        .sort((x, y) => y.score * y.area - x.score * x.area)[0];
+      return { ok: !!best && best.score >= 0.5 && best.area >= 0.12, best };
+    } catch { return { ok: true, skipped: true }; }
+  }
+
+  // ---------- choose: live camera or gallery ----------
+  function chooseSource(slot) {
+    if (!D.allowGallery) return openCamera(slot);
+    const m = document.createElement('div'); m.className = 'modal sheet'; m.setAttribute('role', 'dialog');
+    m.innerHTML = `<div class="card stack"><h3 style="margin:0">${esc(t('srcTitle', { slot: slotName(slot) }))}</h3>
+      <button class="p w100" id="srcCam">📷 ${esc(t('srcCamera'))}</button>
+      <button class="w100" id="srcGal">🖼 ${esc(t('srcGallery'))}</button>
+      <button class="ghost w100" id="srcX">${esc(t('cancel'))}</button></div>`;
+    document.body.appendChild(m);
+    const close = () => m.remove();
+    m.onclick = e => { if (e.target === m) close(); };
+    m.querySelector('#srcX').onclick = close;
+    m.querySelector('#srcCam').onclick = () => { close(); openCamera(slot); };
+    m.querySelector('#srcGal').onclick = () => { close(); pickFile(slot, '#fileGal'); };
+    m.querySelector('#srcCam').focus();
+  }
+  function pickFile(slot, sel) {
+    const inp = $(sel); inp.value = '';
+    inp.onchange = async () => {
+      const f = inp.files[0]; if (!f) return;
+      try { review(slot, await loadImage(f), false); } catch { alertBox(t('camErr')); }
+    };
+    inp.click();
+  }
+
   // ---------- live camera ----------
   let stream = null;
   async function openCamera(slot) {
     const live = window.isSecureContext && navigator.mediaDevices?.getUserMedia;
     if (!live) {
-      if (!D.allowFileFallback) return alertBox(t('httpsNeeded'));
-      const inp = $('#fileCam'); inp.value = '';
-      inp.onchange = async () => { const f = inp.files[0]; if (f) review(slot, await loadImage(f), false); };
-      return inp.click();
+      if (!D.allowFileFallback && !D.allowGallery) return alertBox(t('httpsNeeded'));
+      return pickFile(slot, '#fileCam');
     }
     const ov = document.createElement('div');
     ov.className = 'cam'; ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-label', slotName(slot));
@@ -180,7 +249,7 @@
       };
     } catch {
       close();
-      if (D.allowFileFallback) { const inp = $('#fileCam'); inp.value = ''; inp.onchange = async () => { const f = inp.files[0]; if (f) review(slot, await loadImage(f), false); }; inp.click(); }
+      if (D.allowFileFallback || D.allowGallery) pickFile(slot, '#fileCam');
       else alertBox(t('camErr'));
     }
   }
@@ -213,13 +282,19 @@
   async function review(slot, img, live) {
     const issues = quality(img), blob = await toJpeg(img), url = URL.createObjectURL(blob);
     const ov = document.createElement('div'); ov.className = 'cam'; ov.setAttribute('role', 'dialog');
-    const qtxt = issues.length ? t('qMsg', { issues: issues.map(i => L().q[i] || i).join(lang === 'ar' ? '، ' : ', ') }) : '';
     ov.innerHTML = `<img class="pv" src="${url}" alt=""><div class="ctop"><b>${esc(slotName(slot))}</b></div>
-      <div class="cbot">${qtxt ? `<span class="qmsg" role="alert">${esc(qtxt)}</span>` : ''}
-      <button id="rt">${esc(t('retakeBtn'))}</button><button class="y" id="ok">${esc(issues.length ? t('useAnyway') : t('usePhoto'))}</button></div>`;
+      <div class="cbot"><span class="qmsg" role="status">${esc(t('checking'))}</span></div>`;
     document.body.appendChild(ov);
-    ov.querySelector('#rt').onclick = () => { ov.remove(); URL.revokeObjectURL(url); openCamera(slot); };
-    ov.querySelector('#ok').onclick = () => { ov.remove(); upload(slot, blob, url, live, issues); };
+    const car = await carCheck(slot, img);
+    if (!car.ok) issues.push('no car detected');
+    if (issues.length) tries[slot.key] = (tries[slot.key] || 0) + 1;
+    const noCar = !car.ok, canOverride = !issues.length || tries[slot.key] >= 2;
+    const qtxt = noCar ? t('noCar') : issues.length ? t('qMsg', { issues: issues.map(i => L().q[i] || i).join(lang === 'ar' ? '، ' : ', ') }) : '';
+    ov.querySelector('.cbot').innerHTML = `${qtxt ? `<span class="qmsg" role="alert">${esc(qtxt)}</span>` : ''}
+      <button ${issues.length ? 'class="y"' : ''} id="rt">${esc(t('retakeBtn'))}</button>
+      ${canOverride ? `<button ${issues.length ? '' : 'class="y"'} id="ok">${esc(issues.length ? t('useReview') : t('usePhoto'))}</button>` : ''}`;
+    ov.querySelector('#rt').onclick = () => { ov.remove(); URL.revokeObjectURL(url); live ? openCamera(slot) : chooseSource(slot); };
+    ov.querySelector('#ok')?.addEventListener('click', () => { ov.remove(); tries[slot.key] = 0; upload(slot, blob, url, live, issues); });
   }
 
   async function upload(slot, blob, url, live, issues) {

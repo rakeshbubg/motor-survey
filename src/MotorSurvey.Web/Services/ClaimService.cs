@@ -193,7 +193,9 @@ public sealed class ClaimService(
         var span = times.Count > 0 ? (times.Max() - times.Min()).TotalMinutes : 0;
         list.Add(new(span <= 60, $"All photos taken within {Math.Max(1, Math.Round(span))} min"));
         var notLive = c.Photos.Count(p => !p.LiveCamera);
-        if (notLive > 0) list.Add(new(false, $"{notLive} photo(s) not taken with the live camera"));
+        if (notLive > 0) list.Add(new(false, $"{notLive} photo(s) uploaded from the gallery (not taken live)"));
+        var noCar = c.Photos.Count(p => p.Quality.Contains("no car", StringComparison.OrdinalIgnoreCase));
+        if (noCar > 0) list.Add(new(false, $"{noCar} photo(s) where no car was detected"));
         var q = c.Photos.Count(p => p.QualityOverride);
         if (q > 0) list.Add(new(false, $"{q} photo(s) kept despite a quality warning"));
         var dup = c.Photos.GroupBy(p => p.Sha256).Count(g => g.Count() > 1);

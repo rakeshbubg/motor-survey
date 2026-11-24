@@ -1,0 +1,30 @@
+# Pilot server: the app behind Caddy, which gets a free HTTPS certificate automatically.
+# 1) point DNS (e.g. survey.your-domain.com) at the server  2) copy src/MotorSurvey.Web/data/erp_customers.xlsx into deploy/data/
+# 3) set the values below  4) docker compose -f deploy/docker-compose.yml up -d --build
+services:
+  app:
+    build: { context: .., dockerfile: deploy/Dockerfile }
+    restart: unless-stopped
+    environment:
+      Survey__PublicBaseUrl: https://${SURVEY_DOMAIN}
+      Survey__StaffKey: ${STAFF_KEY}
+      Survey__AllowFileFallback: "false"
+      Erp__Provider: ${ERP_PROVIDER:-Excel}
+      Odoo__Url: ${ODOO_URL:-}
+      Odoo__Database: ${ODOO_DB:-}
+      Odoo__ApiKey: ${ODOO_API_KEY:-}
+      Messaging__Email__User: ${GMAIL_USER:-}
+      Messaging__Email__Password: ${GMAIL_APP_PASSWORD:-}
+      Messaging__Twilio__AccountSid: ${TWILIO_SID:-}
+      Messaging__Twilio__AuthToken: ${TWILIO_TOKEN:-}
+      Messaging__Twilio__SmsFrom: ${TWILIO_SMS_FROM:-}
+      Messaging__Twilio__WhatsAppFrom: ${TWILIO_WHATSAPP_FROM:-}
+    volumes: [ "./data:/data" ]
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: [ "80:80", "443:443" ]
+    command: caddy reverse-proxy --from ${SURVEY_DOMAIN} --to app:8080
+    volumes: [ "caddy_data:/data" ]
+volumes:
+  caddy_data:

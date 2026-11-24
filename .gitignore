@@ -1,0 +1,13 @@
+bin/
+obj/
+.vs/
+*.user
+src/MotorSurvey.Web/data/claims/
+src/MotorSurvey.Web/data/files/
+src/MotorSurvey.Web/data/erp_outbox/
+src/MotorSurvey.Web/models/*.onnx
+appsettings.Production.json
+training/dataset/
+training/output/
+src/MotorSurvey.Web/data/keys/
+src/MotorSurvey.Web/data/erp_settings.json

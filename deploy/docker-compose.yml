@@ -9,6 +9,7 @@ services:
       Survey__PublicBaseUrl: https://${SURVEY_DOMAIN}
       Survey__StaffKey: ${STAFF_KEY}
       Survey__AllowFileFallback: "false"
+      Survey__AllowGallery: "false"
       Erp__Provider: ${ERP_PROVIDER:-Excel}
       Odoo__Url: ${ODOO_URL:-}
       Odoo__Database: ${ODOO_DB:-}

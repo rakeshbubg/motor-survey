@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/css/app.css">
 </head>
-<body>
+<body class="staff">
 <header class="top">
   <div class="brand">ILAF · Motor Self-Survey<small id="info">Staff console</small></div>
   <nav class="tabs" aria-label="Views"><a href="#desk" data-v="desk">Claims desk</a><a href="#records" data-v="records">UW records</a><a href="#erp" data-v="erp">ERP connection</a></nav>
@@ -22,8 +22,8 @@
       <p class="mut">Policy data comes from the ERP. The link is single-use and expires automatically (BR-01).</p>
       <form class="card" id="newClaim">
         <label class="f">Policy (from ERP)<select id="fPolicy" required></select></label>
-        <div class="kv" id="polInfo" style="margin-bottom:14px"></div>
-        <div class="kv" style="gap:0 14px">
+        <div class="kv form2" id="polInfo" style="margin-bottom:14px"></div>
+        <div class="kv form2" style="gap:0 14px">
           <label class="f">Claim no. (blank = automatic)<input type="text" id="fClaim" autocomplete="off"></label>
           <label class="f">Incident date<input type="date" id="fDate"></label>
           <label class="f">UW handler<input type="text" id="fHandler"></label>
@@ -34,7 +34,7 @@
       </form>
       <div class="card hide" id="linkOut" style="margin-top:16px"></div>
     </section>
-    <section><h2>Recent claims</h2><div class="list" id="deskList"></div></section>
+    <section class="side"><div class="side-head"><h2>Recent claims</h2><span class="mut" id="deskCount"></span></div><div class="list scroll-list" id="deskList"></div></section>
   </div>
 </main>
 
@@ -49,7 +49,7 @@
     </div>
   </div>
   <div class="grid2">
-    <section><p class="mut" id="cnt"></p><div class="list" id="recList"></div></section>
+    <section class="side"><p class="mut" id="cnt"></p><div class="list scroll-list" id="recList"></div></section>
     <section id="detail"><p class="mut">Select a record to open it.</p></section>
   </div>
 </main>

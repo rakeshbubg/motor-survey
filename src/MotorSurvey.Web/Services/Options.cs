@@ -8,9 +8,11 @@ public sealed class SurveyOptions
     /// <summary>Findings below this confidence are flagged for UW review (BR-12).</summary>
     public double ReviewConfidence { get; set; } = 0.70;
     /// <summary>Allow the phone's photo picker when the live camera is unavailable. Set false in production (BR-02).</summary>
-    public bool AllowFileFallback { get; set; } = true;
+    public bool AllowFileFallback { get; set; } = false;
     /// <summary>Let customers pick "Upload from gallery" as well as the live camera. Gallery photos are flagged for UW.</summary>
-    public bool AllowGallery { get; set; } = true;
+    public bool AllowGallery { get; set; } = false;
+    /// <summary>Refuse consent and photos without a GPS location.</summary>
+    public bool RequireGps { get; set; } = true;
     public int MaxPhotoMb { get; set; } = 15;
     /// <summary>Key staff screens must send (header X-Staff-Key). Replace with Azure AD / Odoo login before go-live.</summary>
     public string StaffKey { get; set; } = "";

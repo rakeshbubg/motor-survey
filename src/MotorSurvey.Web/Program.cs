@@ -38,6 +38,16 @@ builder.Services.AddSingleton(sp => new ErpManager(cfg, builder.Environment.Cont
 builder.Services.AddSingleton<IErpClient>(sp => sp.GetRequiredService<ErpManager>());
 
 // ---- AI engine: ONNX model if built with -p:UseOnnx=true and the model file exists ----
+// ---- AI engine: Gemini (if a key is set), else the ONNX model, else manual review ----
+var gemini = cfg.GetSection("Ai:Gemini").Get<GeminiOptions>() ?? new();
+if (!string.IsNullOrWhiteSpace(gemini.ApiKey))
+{
+    builder.Services.AddHttpClient("gemini", c => c.Timeout = TimeSpan.FromSeconds(gemini.TimeoutSeconds + 10));
+    builder.Services.AddSingleton<IDamageDetector>(sp => new GeminiDamageDetector(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("gemini"), gemini, sp.GetRequiredService<ILogger<GeminiDamageDetector>>()));
+}
+else
+{
 #if USE_ONNX
 var ai = cfg.GetSection("Ai").Get<MotorSurvey.Ai.Onnx.OnnxDetectorOptions>() ?? new();
 ai.ModelPath = Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath, ai.ModelPath));
@@ -46,6 +56,7 @@ else builder.Services.AddSingleton<IDamageDetector, NoModelDetector>();
 #else
 builder.Services.AddSingleton<IDamageDetector, NoModelDetector>();
 #endif
+}
 
 // ---- limits ----
 builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = (survey.MaxPhotoMb + 2) * 1024L * 1024);
@@ -95,7 +106,7 @@ object ClientView(Claim c, SurveyOptions o) => new
     c.ClaimNo, c.CustomerName, c.Status, c.ExpiresAt, c.Language, consent = c.ConsentAt != null,
     vehicle = new { c.Vehicle.Make, c.Vehicle.Model, c.Vehicle.Year, c.Vehicle.Colour, c.Vehicle.PlateNo, c.Vehicle.Vin, c.Vehicle.Odometer },
     slots = Slots.All, photos = c.Photos.Select(p => new { p.Slot, p.ReceivedAt, p.Quality, gps = p.Location != null }),
-    c.AiStatus, c.AiMessage, c.Flagged, c.Findings, c.Checks, o.AllowFileFallback, o.AllowGallery, o.MaxPhotoMb,
+    c.AiStatus, c.AiMessage, c.Flagged, c.Findings, c.Checks, o.AllowFileFallback, o.AllowGallery, o.RequireGps, o.MaxPhotoMb,
 };
 s.MapGet("", async (string token, ClaimService svc, IOptions<SurveyOptions> o, CancellationToken ct) => Results.Ok(ClientView(await svc.OpenAsync(token, ct), o.Value)));
 s.MapPost("/consent", async (string token, ConsentRequest req, ClaimService svc, IOptions<SurveyOptions> o, CancellationToken ct) => Results.Ok(ClientView(await svc.ConsentAsync(token, req, ct), o.Value)));
@@ -161,7 +172,7 @@ staff.MapGet("/claims/{no}", async (string no, HttpRequest http, ClaimService sv
     var key = http.Headers["X-Staff-Key"].FirstOrDefault() ?? http.Query["k"].FirstOrDefault() ?? "";
     return Results.Ok(new
     {
-        summary = Summary(c), c.Vehicle, c.IncidentDate, c.Findings, c.Checks, c.AiMessage, c.DetectorName, c.ConsentAt, c.SignedAt, c.ReportHash, c.ErpError, c.ReviewNote,
+        summary = Summary(c), c.Vehicle, c.IncidentDate, c.Findings, c.Checks, c.AiMessage, c.AiReview, c.DetectorName, c.ConsentAt, c.SignedAt, c.ReportHash, c.ErpError, c.ReviewNote,
         photos = c.Photos.Select(p => new { p.Id, p.Label, p.ReceivedAt, p.Location, p.LiveCamera, p.Quality, p.QualityOverride, url = Url(p.Path, key, c.ClaimNo, p.Id) }),
         signatureUrl = Url(c.SignaturePath, key, c.ClaimNo, "signature"),
         reportUrl = c.ReportPath == null ? null : $"/api/staff/claims/{Uri.EscapeDataString(c.ClaimNo)}/report?k={Uri.EscapeDataString(key)}",
@@ -259,7 +270,7 @@ static object Summary(Claim c) => new
 {
     c.ClaimNo, c.PolicyNo, c.CustomerName, c.Mobile, c.Email, plate = c.Vehicle.PlateNo, vin = c.Vehicle.Vin,
     vehicle = $"{c.Vehicle.Make} {c.Vehicle.Model} {c.Vehicle.Year}", c.Handler, c.Channel, c.LastDelivery, c.CreatedAt, c.ExpiresAt, c.Status,
-    photos = c.Photos.Count, findings = c.Findings.Count, c.Flagged, c.Reviewed, c.ErpRef, c.ErpError, c.FiledAt, c.AiStatus,
+    photos = c.Photos.Count, findings = c.Findings.Count, c.Flagged, c.Reviewed, aiRec = c.AiReview?.Recommendation, c.ErpRef, c.ErpError, c.FiledAt, c.AiStatus,
 };
 
 public sealed record ReviewRequest(string? Note);

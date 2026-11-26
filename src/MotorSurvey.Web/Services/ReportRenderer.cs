@@ -60,6 +60,13 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:6px;bord
             sb.Append("</tbody></table>");
         }
 
+        if (c.AiReview is { } ar)
+        {
+            var color = ar.Recommendation switch { "Approve" => "#1d6b3a", "Refer" => "#b3261e", _ => "#8a6d00" };
+            sb.Append($"<h2>AI review for UW (internal)</h2><p><span style=\"background:{color};color:#fff;padding:3px 10px;border-radius:12px;font-weight:700\">{E(ar.Recommendation)}</span> <span class=\"mut\">confidence {ar.Confidence:P0}</span></p><p>{E(ar.Summary)}</p>");
+            if (ar.Reasons.Count > 0) sb.Append("<ul>" + string.Concat(ar.Reasons.Select(r => $"<li>{E(r)}</li>")) + "</ul>");
+            sb.Append("<p class=\"mut\" style=\"font-size:11px\">AI suggestion only. The underwriter makes the decision.</p>");
+        }
         sb.Append("<h2>Evidence checks</h2><ul>");
         foreach (var ch in c.Checks) sb.Append($"<li>{(ch.Ok == true ? "✓" : ch.Ok == false ? "⚠" : "•")} {E(ch.Text)}</li>");
         sb.Append("</ul>");

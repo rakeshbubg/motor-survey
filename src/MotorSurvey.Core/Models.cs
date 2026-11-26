@@ -34,6 +34,8 @@ public sealed class Claim
     public string AiStatus { get; set; } = "pending";   // pending | ok | no-model | error
     public string? AiMessage { get; set; }
     public string? DetectorName { get; set; }
+    /// <summary>AI recommendation for the underwriter (never shown to the customer).</summary>
+    public AiReview? AiReview { get; set; }
     public string? SignaturePath { get; set; }
     public DateTimeOffset? SignedAt { get; set; }
     public string? ReportHash { get; set; }
@@ -92,11 +94,15 @@ public sealed class Finding
     public string PhotoLabel { get; set; } = "";
     public float[]? Box { get; set; }             // x, y, w, h as fractions of the image
     public bool NeedsReview { get; set; }
+    public string? Note { get; set; }
 }
 
 public sealed record EvidenceCheck(bool? Ok, string Text);
 
-/// <summary>The photo positions a client must (or may) capture. BR-05: the first 8 are mandatory.</summary>
+/// <summary>AI review for UW. Recommendation: Approve | Inspect | Refer.</summary>
+public sealed record AiReview(string Recommendation, string Summary, List<string> Reasons, double Confidence);
+
+/// <summary>The photo positions a client must (or may) capture. BR-05: at least the 8 around the car; here 12 are required.</summary>
 public static class Slots
 {
     public sealed record Slot(string Key, string Label, bool Required);
@@ -105,8 +111,9 @@ public static class Slots
         new("front", "Front", true), new("fr", "Front-right corner", true), new("right", "Right side", true),
         new("rr", "Rear-right corner", true), new("rear", "Rear", true), new("rl", "Rear-left corner", true),
         new("left", "Left side", true), new("fl", "Front-left corner", true),
-        new("plate", "Number plate / VIN", false), new("odo", "Odometer", false),
-        new("close1", "Damage close-up 1", false), new("close2", "Damage close-up 2", false), new("close3", "Damage close-up 3", false),
+        new("top", "Top view", true),
+        new("plate", "Number plate / VIN", true), new("odo", "Odometer", true),
+        new("close1", "Damage close-up 1", true), new("close2", "Damage close-up 2", false), new("close3", "Damage close-up 3", false),
     ];
     public static Slot? Find(string key) => All.FirstOrDefault(s => s.Key == key);
     public static int RequiredCount => All.Count(s => s.Required);

@@ -27,7 +27,17 @@ public sealed record DetectionResult(
     string? PlateText = null, string? VinText = null, string? OdometerText = null, string? Issue = null);
 
 /// <summary>One damage found. Box is x, y, w, h as fractions of the image.</summary>
-public sealed record DetectedDamage(string Type, string Part, double Confidence, float X, float Y, float W, float H);
+public sealed record DetectedDamage(string Type, string Part, double Confidence, float X, float Y, float W, float H, string? Severity = null, string? Note = null);
+
+/// <summary>A detector that looks at all photos of a survey in one call (e.g. a vision AI API): fewer requests, better context.</summary>
+public interface IBatchDamageDetector : IDamageDetector
+{
+    /// <param name="context">The insured vehicle and claim, so the AI can spot a different car or inconsistent damage.</param>
+    Task<BatchDetection> DetectAllAsync(IReadOnlyList<(string ImagePath, Slots.Slot Slot)> photos, SurveyContext context, CancellationToken ct);
+}
+
+public sealed record SurveyContext(string Make, string Model, int Year, string Colour, string PlateNo, DateOnly? IncidentDate);
+public sealed record BatchDetection(IReadOnlyList<DetectionResult> Photos, AiReview? Review);
 
 public interface IClaimStore
 {

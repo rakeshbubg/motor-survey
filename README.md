@@ -80,6 +80,16 @@ For the pilot, a Kuwaiti SMS provider usually gives better delivery and a sender
 
 On the server (docker-compose), put the same values in `deploy/.env`: `GMAIL_USER`, `GMAIL_APP_PASSWORD`, `TWILIO_SID`, `TWILIO_TOKEN`, `TWILIO_SMS_FROM`, `TWILIO_WHATSAPP_FROM`.
 
+## Required photos and GPS
+
+12 photos are required: the 8 around the car (numbered on the car diagram), **9. Top view** (phone held up high),
+**10. Number plate / VIN**, **11. Odometer** and **12. one damage close-up** (or the best side if there is no damage).
+Close-ups 2 and 3 are optional.
+
+**GPS is mandatory** (`Survey:RequireGps`, default true): the survey can't start without location, the camera won't open
+without a fresh location (under 2 minutes old), and the server refuses any photo without GPS. If location is off, the customer
+sees step-by-step help for Android, iPhone and links opened inside WhatsApp, plus a "Copy link" button to open it in Chrome/Safari.
+
 ## Photo checks on the phone
 
 Every photo (live camera or gallery) is checked on the customer's phone before it is accepted:
@@ -88,14 +98,37 @@ Every photo (live camera or gallery) is checked on the customer's phone before i
 - **Quality:** blur, too dark, too bright, low resolution.
 - First failure: the customer must **retake**. From the second attempt they may "Use anyway (will be reviewed)",
   and the photo is flagged in the report's evidence checks for UW.
-- Gallery uploads are allowed (`Survey:AllowGallery`) but flagged as "not taken live". Set it to `false` to force the live camera.
+- Gallery uploads are **off** (live camera only, BR-02). `Survey:AllowGallery: true` would allow them, flagged as "not taken live".
 - Customers can tap a number on the car diagram or the Take button; both offer **Take photo** or **Upload from gallery**.
 
 The model (~5 MB) is downloaded into the server image at build time and cached by the phone. If it can't load, the check is skipped
 (never blocks the customer) and UW still sees every photo. It can't tell a real car from a photo of a car on a screen;
 the damage model you train later is the place for stronger fraud checks.
 
-## The AI model
+## AI damage check with Google Gemini (free tier)
+
+1. Get a free key: **aistudio.google.com → Get API key → Create API key** (no card needed).
+2. Server (AWS terminal): `printf "GEMINI_API_KEY=your-key\n" >> deploy/.env` then `sudo docker compose -f deploy/docker-compose.yml up -d --build`.
+   Laptop: `dotnet user-secrets set "Ai:Gemini:ApiKey" "your-key"` in `src/MotorSurvey.Web`.
+3. The staff console header shows **AI: Gemini (gemini-3.5-flash)**.
+
+All photos of a survey go to Gemini in **one request**. It returns each damage (type, part, severity, confidence),
+reads plate / VIN / odometer, and flags suspicious photos (screens, no vehicle, wrong position, a different car).
+Findings under `Survey:ReviewConfidence` and every flagged photo go to UW review. If Gemini fails (limit reached, wrong key),
+the survey still completes and goes to manual review with the reason shown.
+
+**AI review for UW** (same Gemini request, no extra cost): each survey also gets a recommendation —
+**Approve** (genuine, consistent, clear damage) · **Inspect** (needs a closer look or a physical survey) · **Refer** (possible fraud:
+different car or colour/plate vs the policy, screen photos, the same damage shown twice, old rust) — with a short summary and reasons.
+Gemini is given the policy's make, model, colour and plate to compare. It appears in UW records (badge in the list), the report and the ERP payload,
+never on the customer's screen. Anything other than Approve is flagged for review. It is a suggestion; the underwriter decides.
+
+**Important:** on Google's **free tier, the photos may be used to improve Google's products and reviewed by people.**
+Use it for demos with test cars. For real customers, enable billing on the key (paid tier: data not used for training,
+a few cents per survey) or switch to your own trained model (below). Free-tier models change over time: if Google
+retires `gemini-3.5-flash`, set `GEMINI_MODEL=` in `deploy/.env` to a current one from ai.google.dev/gemini-api/docs/pricing.
+
+## The AI model (your own, later)
 
 Until a model is installed, every survey is routed to manual UW review (and says so).
 1. Train RF-DETR on your claim photos: see `training/README.md`.

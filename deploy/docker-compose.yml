@@ -20,6 +20,8 @@ services:
       Messaging__Twilio__AuthToken: ${TWILIO_TOKEN:-}
       Messaging__Twilio__SmsFrom: ${TWILIO_SMS_FROM:-}
       Messaging__Twilio__WhatsAppFrom: ${TWILIO_WHATSAPP_FROM:-}
+      Ai__Gemini__ApiKey: ${GEMINI_API_KEY:-}
+      Ai__Gemini__Model: ${GEMINI_MODEL:-gemini-3.5-flash}
     volumes: [ "./data:/data" ]
   caddy:
     image: caddy:2

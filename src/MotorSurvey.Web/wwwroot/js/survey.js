@@ -79,9 +79,11 @@
     const go = $('#go'); go.disabled = true; go.textContent = t('locating');
     await getLocation();
     if (!loc) {
-      $('#cErr').textContent = t('gpsOff');
-      setDock(`<div class="row" style="justify-content:stretch"><button class="p" style="flex:1" id="go">${esc(t('retry'))}</button><button id="noGps" style="flex:1">${esc(t('continueNoGps'))}</button></div>`);
-      $('#go').onclick = startConsent; $('#noGps').onclick = () => sendConsent();
+      if (!D.requireGps) return sendConsent();
+      $('#cErr').innerHTML = '';
+      gpsHelp($('#cErr'));
+      setDock(`<button class="p w100" id="go">${esc(t('retry'))}</button>`);
+      $('#go').onclick = startConsent;
       return;
     }
     await sendConsent();
@@ -97,18 +99,42 @@
       navigator.geolocation.getCurrentPosition(p => { setLoc(p); res(); }, () => { locDenied = true; res(); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 });
     });
   }
-  function setLoc(p) { loc = { lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy) }; }
+  function setLoc(p) { loc = { lat: +p.coords.latitude.toFixed(6), lng: +p.coords.longitude.toFixed(6), acc: Math.round(p.coords.accuracy), t: Date.now() }; }
+  // GPS is required for every photo: fresh fix (under 2 min) or ask again
+  async function ensureLocation() {
+    if (!D.requireGps) return true;
+    if (loc && Date.now() - loc.t < 120000) return true;
+    await getLocation();
+    if (loc) { startWatch(); return true; }
+    const m = document.createElement('div'); m.className = 'modal'; m.setAttribute('role', 'dialog');
+    m.innerHTML = `<div class="card stack" id="gpsBox"></div>`;
+    gpsHelp(m.querySelector('#gpsBox'));
+    m.querySelector('#gpsBox').insertAdjacentHTML('beforeend', `<button class="p w100" id="gpsOk">${esc(t('retry'))}</button><button class="ghost w100" id="gpsX">${esc(t('cancel'))}</button>`);
+    document.body.appendChild(m);
+    return await new Promise(res => {
+      m.querySelector('#gpsX').onclick = () => { m.remove(); res(false); };
+      m.querySelector('#gpsOk').onclick = async () => { m.remove(); res(await ensureLocation()); };
+    });
+  }
+  function gpsHelp(el) {
+    const ua = navigator.userAgent, ios = /iPhone|iPad|iPod/i.test(ua), android = /Android/i.test(ua);
+    const inApp = /FBAN|FBAV|Instagram|WhatsApp|Line\/|Snapchat|wv\)/i.test(ua);
+    el.insertAdjacentHTML('beforeend', `<div role="alert"><h3 style="margin:0 0 6px">📍 ${esc(t('gpsTitle'))}</h3><p>${esc(t('gpsIntro'))}</p>
+      <ul style="padding-inline-start:18px;margin:0 0 10px">${inApp ? `<li><b>${esc(t('gpsInApp'))}</b></li>` : ''}${ios || !android ? `<li>${esc(t('gpsIos'))}</li>` : ''}${android || !ios ? `<li>${esc(t('gpsAndroid'))}</li>` : ''}</ul>
+      <button class="sm" type="button" data-copy>${esc(t('copyLink'))}</button></div>`);
+    el.querySelector('[data-copy]').onclick = async e => { try { await navigator.clipboard.writeText(location.href); e.target.textContent = t('copied'); } catch { } };
+  }
   function startWatch() { if (navigator.geolocation && watchId == null) watchId = navigator.geolocation.watchPosition(setLoc, () => { }, { enableHighAccuracy: true, maximumAge: 15000 }); }
 
   // ---------- capture ----------
   const has = k => D.photos.some(p => p.slot === k);
   function carSvg() {
-    const pos = { front: [100, 16], fr: [176, 56], right: [190, 200], rr: [176, 344], rear: [100, 384], rl: [24, 344], left: [10, 200], fl: [24, 56] };
-    const dots = D.slots.filter(s => s.required).map((s, i) => {
+    const pos = { front: [100, 16], fr: [176, 56], right: [190, 200], rr: [176, 344], rear: [100, 384], rl: [24, 344], left: [10, 200], fl: [24, 56], top: [100, 220] };
+    const dots = D.slots.filter(s => s.required).map((s, i) => [s, i]).filter(([s]) => pos[s.key]).map(([s, i]) => {
       const [x, y] = pos[s.key] || [0, 0], on = has(s.key);
       return `<g class="pdot" data-slot="${s.key}" role="button" tabindex="0" aria-label="${esc((i + 1) + '. ' + slotName(s))}" style="cursor:pointer"><circle cx="${x}" cy="${y}" r="22" fill="transparent"/><circle cx="${x}" cy="${y}" r="14" fill="${on ? '#ffe600' : 'var(--bg)'}" stroke="currentColor" stroke-width="2"/><text x="${x}" y="${y + 5}" text-anchor="middle" font-size="13" font-weight="700" fill="${on ? '#111' : 'currentColor'}" pointer-events="none">${i + 1}</text></g>`;
     }).join('');
-    return `<svg viewBox="-8 0 216 400" role="img" aria-label="${esc(t('count', { n: D.slots.filter(s => s.required && has(s.key)).length }))}" dir="ltr" style="color:var(--ink)">
+    return `<svg viewBox="-8 0 216 400" role="img" aria-label="${esc(t('count', { n: D.slots.filter(s => s.required && has(s.key)).length, total: D.slots.filter(s => s.required).length }))}" dir="ltr" style="color:var(--ink)">
       <rect x="48" y="44" width="104" height="312" rx="44" fill="var(--con2)" stroke="currentColor" stroke-width="2"/>
       <path d="M62 120 Q100 98 138 120 L132 160 Q100 150 68 160Z" fill="var(--bg)" stroke="currentColor" stroke-width="1.5"/>
       <path d="M68 280 Q100 290 132 280 L138 310 Q100 326 62 310Z" fill="var(--bg)" stroke="currentColor" stroke-width="1.5"/>
@@ -152,9 +178,10 @@
     updateDock();
   }
   function updateDock() {
+    const total = D.slots.filter(s => s.required).length;
     const n = D.slots.filter(s => s.required && has(s.key)).length, busy = Object.values(upState).includes('up');
-    setDock(`<div class="row" style="justify-content:space-between"><span>${esc(t('count', { n }))}</span></div><div class="bar"><i style="width:${n / 8 * 100}%"></i></div>
-      <button class="p w100" id="runAi" ${n < 8 || busy ? 'disabled' : ''}>${esc(n < 8 ? t('needMore', { n: 8 - n }) : t('runAi'))}</button>`);
+    setDock(`<div class="row" style="justify-content:space-between"><span>${esc(t('count', { n, total }))}</span></div><div class="bar"><i style="width:${n / total * 100}%"></i></div>
+      <button class="p w100" id="runAi" ${n < total || busy ? 'disabled' : ''}>${esc(n < total ? t('needMore', { n: total - n }) : t('runAi'))}</button>`);
     $('#runAi').onclick = async () => { $('#runAi').disabled = true; try { D = await post('/analyze'); render(); } catch (e) { fail(e); } };
   }
   async function loadThumb(slot) {
@@ -162,7 +189,7 @@
   }
 
   // ---------- car check (TensorFlow.js COCO-SSD, runs on the phone; never blocks if it can't load) ----------
-  const EXTERIOR = ['front', 'fr', 'right', 'rr', 'rear', 'rl', 'left', 'fl'];
+  const EXTERIOR = ['front', 'fr', 'right', 'rr', 'rear', 'rl', 'left', 'fl', 'top'];
   const tries = {};
   let detectorP = null;
   const loadScript = src => new Promise((ok, no) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = no; document.head.appendChild(s); });
@@ -225,6 +252,7 @@
   // ---------- live camera ----------
   let stream = null;
   async function openCamera(slot) {
+    if (!(await ensureLocation())) return;
     const live = window.isSecureContext && navigator.mediaDevices?.getUserMedia;
     if (!live) {
       if (!D.allowFileFallback && !D.allowGallery) return alertBox(t('httpsNeeded'));
@@ -298,6 +326,7 @@
   }
 
   async function upload(slot, blob, url, live, issues) {
+    if (D.requireGps && !loc) { if (!(await ensureLocation())) { upState[slot.key] = 'fail'; refreshSlot(slot.key); return; } }
     if (thumbs[slot.key]) URL.revokeObjectURL(thumbs[slot.key]);
     thumbs[slot.key] = url; upState[slot.key] = 'up'; refreshSlot(slot.key);
     const fd = new FormData();
@@ -311,6 +340,7 @@
       upState[slot.key] = 'ok';
     } catch (e) {
       if (e.status === 410 || e.status === 404) return fail(e);
+      if (e.code === 'gps-required') { loc = null; alertBox(t('gpsLost')); }
       upState[slot.key] = 'fail';
     }
     refreshSlot(slot.key);
@@ -373,11 +403,11 @@
     m.innerHTML = `<div class="card"><p>${esc(msg)}</p><button class="p w100">OK</button></div>`;
     m.querySelector('button').onclick = () => m.remove(); document.body.appendChild(m);
   }
-  function fail(e) { D = { ...(D || {}), error: ['link-invalid', 'link-used', 'link-expired'].includes(e.code) ? e.code : 'network' }; render(); }
+  function fail(e) { D = { ...(D || {}), error: ['link-invalid', 'link-used', 'link-expired', 'gps-required'].includes(e.code) ? e.code : 'network' }; render(); }
 
   async function load() {
     try { D = await api(''); if (D.language && !stored()) { lang = D.language; applyLang(); } }
-    catch (e) { D = { error: ['link-invalid', 'link-used', 'link-expired'].includes(e.code) ? e.code : 'network' }; }
+    catch (e) { D = { error: ['link-invalid', 'link-used', 'link-expired', 'gps-required'].includes(e.code) ? e.code : 'network' }; }
     render();
   }
   applyLang(); load();

@@ -28,6 +28,10 @@
   }
   addEventListener('hashchange', route);
 
+  function recPill(rec) {
+    const cls = { Approve: 'g', Inspect: 'y', Refer: 'r' }[rec] || '';
+    return rec ? `<span class="pill ${cls}">AI: ${esc(rec)}</span>` : '';
+  }
   function statusPill(c) {
     if (c.status === 'Filed') return c.flagged && !c.reviewed ? '<span class="pill r">Filed · review</span>' : `<span class="pill g">${c.reviewed ? 'Reviewed' : 'Filed'}</span>`;
     if (c.status === 'ErpFailed') return '<span class="pill r">ERP upload failed</span>';
@@ -67,7 +71,8 @@
   }
   async function loadDesk() {
     try { claims = await api('/claims'); } catch { return; }
-    $('#deskList').innerHTML = claims.length ? claims.slice(0, 15).map(c => `<button class="item" data-no="${esc(c.claimNo)}"><span><b>${esc(c.claimNo)}</b> · ${esc(c.customerName)}<br><span class="note">${esc(c.vehicle)} · ${fmt(c.createdAt)}</span></span>${statusPill(c)}</button>`).join('') : '<p class="mut">No claims yet.</p>';
+    $('#deskCount').textContent = claims.length ? `${claims.length} total` : '';
+    $('#deskList').innerHTML = claims.length ? claims.slice(0, 200).map(c => `<button class="item" data-no="${esc(c.claimNo)}"><span><b>${esc(c.claimNo)}</b> · ${esc(c.customerName)}<br><span class="note">${esc(c.vehicle)} · ${fmt(c.createdAt)}</span></span>${statusPill(c)}</button>`).join('') : '<p class="mut">No claims yet.</p>';
     $('#deskList').querySelectorAll('.item').forEach(b => b.onclick = () => { location.hash = 'records'; openDetail(b.dataset.no); });
   }
 
@@ -78,7 +83,7 @@
     const p = new URLSearchParams(); if ($('#q').value) p.set('q', $('#q').value); if ($('#from').value) p.set('from', $('#from').value); if ($('#to').value) p.set('to', $('#to').value); if ($('#st').value) p.set('status', $('#st').value);
     let list; try { list = await api('/claims?' + p); } catch { return; }
     $('#cnt').textContent = `${list.length} record${list.length === 1 ? '' : 's'} · ${list.filter(c => c.flagged && !c.reviewed && c.status === 'Filed').length} flagged for review`;
-    $('#recList').innerHTML = list.length ? list.map(c => `<button class="item ${current === c.claimNo ? 'sel' : ''}" data-no="${esc(c.claimNo)}"><span><b>${esc(c.claimNo)}</b> · ${esc(c.customerName)}<br><span class="note">${esc(c.policyNo)} · ${esc(c.plate)} · ${c.findings} finding(s)</span></span>${statusPill(c)}</button>`).join('') : '<p class="mut">No matching records.</p>';
+    $('#recList').innerHTML = list.length ? list.map(c => `<button class="item ${current === c.claimNo ? 'sel' : ''}" data-no="${esc(c.claimNo)}"><span><b>${esc(c.claimNo)}</b> · ${esc(c.customerName)}<br><span class="note">${esc(c.policyNo)} · ${esc(c.plate)} · ${c.findings} finding(s)</span></span><span class="row" style="gap:6px">${recPill(c.aiRec)}${statusPill(c)}</span></button>`).join('') : '<p class="mut">No matching records.</p>';
     $('#recList').querySelectorAll('.item').forEach(b => b.onclick = () => openDetail(b.dataset.no));
   }
 
@@ -97,6 +102,9 @@
       <div class="row">${btns}</div><pre id="payload" class="hide"></pre>
       ${c.erpError ? `<p class="err">ERP: ${esc(c.erpError)}</p>` : ''}${c.erpRef ? `<p class="note">ERP reference: ${esc(c.erpRef)} · filed ${fmt(c.filedAt)}</p>` : ''}
       ${r.aiMessage ? `<p class="pill r" style="white-space:normal">${esc(r.aiMessage)}</p>` : ''}
+      ${r.aiReview ? `<div class="card ai-${esc(r.aiReview.recommendation)}"><div class="row" style="justify-content:space-between"><h3 style="margin:0">AI review</h3>${recPill(r.aiReview.recommendation)}</div>
+        <p style="margin:8px 0">${esc(r.aiReview.summary)}</p>${r.aiReview.reasons.length ? `<ul style="margin:0;padding-inline-start:18px">${r.aiReview.reasons.map(x => `<li>${esc(x)}</li>`).join('')}</ul>` : ''}
+        <p class="note">Confidence ${Math.round(r.aiReview.confidence * 100)}% · AI suggestion only, the underwriter decides.</p></div>` : ''}
       <div class="card"><h3>Vehicle</h3><div class="kv">${[['Make', v.make], ['Model', v.model], ['Year', v.year], ['Colour', v.colour], ['Plate', v.plateNo], ['VIN', v.vin], ['Odometer', v.odometer || '—'], ['Incident', r.incidentDate || '—']].map(([k, x]) => `<div><span>${k}</span><b>${esc(x)}</b></div>`).join('')}</div></div>
       <div class="card"><h3>Findings (${r.findings.length})</h3>${r.findings.length ? `<table class="rs"><thead><tr><th>Fault</th><th>Part</th><th>Severity</th><th>Conf.</th><th>Photo</th></tr></thead><tbody>${r.findings.map(f => `<tr><td data-l="Fault">${esc(f.type)}</td><td data-l="Part">${esc(f.part)}</td><td data-l="Severity" class="sev-${esc(f.severity)}">${esc(f.severity)}</td><td data-l="Conf.">${Math.round(f.confidence * 100)}%${f.needsReview ? ' <span class="pill r">review</span>' : ''}</td><td data-l="Photo">${esc(f.photoLabel)}</td></tr>`).join('')}</tbody></table>` : `<p class="mut">${c.status === 'Filed' || c.status === 'ErpFailed' ? 'No automatic findings.' : 'Survey not finished yet.'}</p>`}</div>
       ${r.checks.length ? `<div class="card"><h3>Evidence checks</h3>${r.checks.map(x => `<div>${x.ok === true ? '✓' : x.ok === false ? '⚠' : '•'} ${esc(x.text)}</div>`).join('')}</div>` : ''}

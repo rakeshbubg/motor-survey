@@ -81,6 +81,7 @@ public sealed class ClaimService(
     {
         var c = await OpenAsync(token, ct);
         if (!req.Agree) throw new AppError(400, "Consent is required");
+        if (_o.RequireGps && (req.Lat is null || req.Lng is null)) throw new AppError(400, "gps-required");
         c.ConsentAt ??= Now;
         c.ConsentLocation = req.Lat is { } la && req.Lng is { } ln ? new GeoPoint(la, ln, req.Acc) : null;
         c.Language = req.Language == "ar" ? "ar" : "en";
@@ -95,6 +96,7 @@ public sealed class ClaimService(
         if (c.ConsentAt is null) throw new AppError(400, "Consent is required before photos");
         if (c.Status is ClaimStatus.Analysing) throw new AppError(409, "Photos are being analysed");
         var slot = Slots.Find(up.Slot) ?? throw new AppError(400, "Unknown photo position");
+        if (_o.RequireGps && (up.Lat is null || up.Lng is null)) throw new AppError(400, "gps-required");
         if (up.Length == 0 || up.Length > _o.MaxPhotoMb * 1024L * 1024) throw new AppError(413, "Photo is empty or too large");
 
         // read once: validate it is really a JPEG/PNG/WebP and hash it
@@ -116,7 +118,7 @@ public sealed class ClaimService(
         };
         c.Photos.RemoveAll(x => x.Slot == slot.Key);   // retake replaces the previous photo for that position
         c.Photos.Add(photo);
-        if (c.Status == ClaimStatus.ReadyToSign) { c.Status = ClaimStatus.InSurvey; c.AiStatus = "pending"; c.Findings.Clear(); }
+        if (c.Status == ClaimStatus.ReadyToSign) { c.Status = ClaimStatus.InSurvey; c.AiStatus = "pending"; c.Findings.Clear(); c.AiReview = null; }
         await store.SaveAsync(c, ct);
         return photo;
     }
@@ -141,33 +143,54 @@ public sealed class ClaimService(
         var c = await Required(claimNo, ct);
         if (c.Status != ClaimStatus.Analysing) return;
         var findings = new List<Finding>();
-        string? issue = null;
+        var photoIssues = new List<string>();
         try
         {
-            foreach (var p in c.Photos.OrderBy(p => Slots.All.ToList().FindIndex(s => s.Key == p.Slot)))
+            var ordered = c.Photos.OrderBy(p => Slots.All.ToList().FindIndex(s => s.Key == p.Slot)).ToList();
+            IReadOnlyList<DetectionResult> results;
+            if (detector is IBatchDamageDetector batch && detector.IsReady)
             {
-                var r = await detector.DetectAsync(files.FullPath(p.Path), Slots.Find(p.Slot)!, ct);
-                issue ??= r.Issue;
-                c.Vehicle.PlateRead ??= r.PlateText; c.Vehicle.VinRead ??= r.VinText; c.Vehicle.Odometer ??= r.OdometerText;
+                var v = c.Vehicle;
+                var r0 = await batch.DetectAllAsync(ordered.Select(p => (files.FullPath(p.Path), Slots.Find(p.Slot)!)).ToList(),
+                    new SurveyContext(v.Make, v.Model, v.Year, v.Colour, v.PlateNo, c.IncidentDate), ct);
+                results = r0.Photos;
+                c.AiReview = r0.Review;
+            }
+            else
+            {
+                var list = new List<DetectionResult>();
+                foreach (var p in ordered) list.Add(await detector.DetectAsync(files.FullPath(p.Path), Slots.Find(p.Slot)!, ct));
+                results = list;
+            }
+            for (int k = 0; k < ordered.Count && k < results.Count; k++)
+            {
+                var p = ordered[k]; var r = results[k];
+                if (detector.IsReady && !string.IsNullOrWhiteSpace(r.Issue)) photoIssues.Add($"{p.Label}: {r.Issue}");
+                if (!string.IsNullOrWhiteSpace(r.PlateText)) c.Vehicle.PlateRead ??= r.PlateText;
+                if (!string.IsNullOrWhiteSpace(r.VinText)) c.Vehicle.VinRead ??= r.VinText;
+                if (!string.IsNullOrWhiteSpace(r.OdometerText)) c.Vehicle.Odometer ??= r.OdometerText;
                 findings.AddRange(r.Damages.Select(d => new Finding
                 {
                     Type = d.Type, Part = d.Part, Confidence = Math.Round(d.Confidence, 3), PhotoId = p.Id, PhotoLabel = p.Label,
-                    Severity = SeverityRules.For(d.Type, d.W * d.H), Box = [d.X, d.Y, d.W, d.H],
+                    Severity = d.Severity is "Low" or "Medium" or "High" ? d.Severity : SeverityRules.For(d.Type, d.W * d.H),
+                    Box = d.W > 0 ? [d.X, d.Y, d.W, d.H] : null, Note = d.Note,
                     NeedsReview = d.Confidence < _o.ReviewConfidence,
                 }));
             }
-            c.AiStatus = !detector.IsReady ? "no-model" : "ok";
-            c.AiMessage = !detector.IsReady ? "AI model not installed yet — every survey goes to manual UW review." : issue;
+            c.AiStatus = detector.IsReady ? "ok" : "no-model";
+            c.AiMessage = detector.IsReady ? null : "AI model not installed yet — every survey goes to manual UW review.";
         }
         catch (Exception ex)
         {
             log.LogError(ex, "Detector failed on {Claim}", claimNo);
-            c.AiStatus = "error"; c.AiMessage = "AI check failed — sent to manual UW review.";
+            c.AiStatus = "error"; c.AiMessage = "AI check could not run (" + Short(ex.Message) + ") — sent to manual UW review.";
         }
         c.DetectorName = detector.Name;
         c.Findings = findings;
         c.Checks = BuildChecks(c);
-        c.Flagged = c.AiStatus != "ok" || findings.Any(f => f.NeedsReview) || c.Checks.Any(x => x.Ok == false);
+        c.Checks.AddRange(photoIssues.Select(x => new EvidenceCheck(false, "AI: " + x)));
+        c.Flagged = c.AiStatus != "ok" || findings.Any(f => f.NeedsReview) || c.Checks.Any(x => x.Ok == false)
+                    || (c.AiReview != null && c.AiReview.Recommendation != "Approve");
         c.Status = ClaimStatus.ReadyToSign;
         await store.SaveAsync(c, ct);
     }
@@ -248,6 +271,7 @@ public sealed class ClaimService(
         photos = c.Photos.Select(p => new { position = p.Label, p.Sha256, capturedAt = p.ReceivedAt, gps = p.Location, p.LiveCamera, p.Quality }),
         checks = c.Checks,
         signature = new { signedBy = c.CustomerName, c.SignedAt, reportSha256 = c.ReportHash },
+        aiReview = c.AiReview,
         routing = new { department = "Underwriting", handler = c.Handler, flaggedForReview = c.Flagged, ai = c.AiStatus },
     };
 
@@ -256,6 +280,7 @@ public sealed class ClaimService(
         $"Customer: {c.CustomerName} · Vehicle: {c.Vehicle.Make} {c.Vehicle.Model} {c.Vehicle.Year} · Plate {c.Vehicle.PlateNo}\n" +
         $"Findings: {c.Findings.Count} ({string.Join(", ", c.Findings.GroupBy(f => f.Severity).Select(g => $"{g.Count()} {g.Key}"))})\n" +
         $"Signed: {c.SignedAt:yyyy-MM-dd HH:mm} UTC · SHA-256 {c.ReportHash}\n" +
+        (c.AiReview is { } ar ? $"AI review: {ar.Recommendation} — {ar.Summary}\n" : "") +
         (c.Flagged ? $"⚠ Flagged for UW review — handler {c.Handler}" : $"Handler: {c.Handler}");
 
     private string ComputeReportHash(Claim c, string signatureSha)
@@ -273,6 +298,8 @@ public sealed class ClaimService(
     // ---------- helpers ----------
     public async Task<Claim> Required(string claimNo, CancellationToken ct) => await store.GetAsync(claimNo, ct) ?? throw new AppError(404, "Claim not found");
     private static string NewClaimNo() => $"CLM-{DateTime.UtcNow:yy}-{RandomNumberGenerator.GetInt32(100000, 999999)}";
+
+    private static string Short(string s) => s.Length > 140 ? s[..140] + "…" : s;
 
     private static (string ext, string mime)? Sniff(byte[] b) =>
         b.Length > 12 && b[0] == 0xFF && b[1] == 0xD8 ? (".jpg", "image/jpeg")
